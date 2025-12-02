@@ -1,7 +1,3 @@
-// ===============================================
-// ✅ FINAL SERVER.JS (100% FIXED & WORKING)
-// ===============================================
-
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -13,11 +9,11 @@ const listBackups = require("./listBackups");
 const restoreFromBucket = require("./restoreFromBucket");
 const supabase = require("./db");
 
-// --------------------------------------
-// ⭐ DIRECT POSTGRESQL CONNECTION (FIXED)
-// --------------------------------------
 const { Client } = require("pg");
 
+// --------------------------------------
+// ⭐ PostgreSQL Connection
+// --------------------------------------
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false }
@@ -28,17 +24,25 @@ pg.connect()
   .catch((err) => console.error("❌ PG Error:", err));
 
 const app = express();
-app.use(cors());
+
+// --------------------------------------
+// ⭐ CORS FIXED
+// --------------------------------------
+app.use(
+  cors({
+    origin: "*",   // allow all origins
+  })
+);
+
 app.use(express.json());
 
 // --------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
-// --------------------------------------
 app.get("/", (req, res) => res.json({ ok: true }));
 
 // =====================================================================
-// 1) BACKUP SYSTEM
+// BACKUP SYSTEM
 // =====================================================================
 app.post("/api/backup", async (req, res) => {
   const result = await doBackup();
@@ -75,7 +79,7 @@ app.get("/api/download-backup/:name", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
 
     res.send(buffer);
-  } catch (err) {
+  } catch {
     res.status(500).send("Download failed");
   }
 });
@@ -93,13 +97,13 @@ app.post("/api/delete-backup", async (req, res) => {
 
     if (error) return res.json({ success: false, error: error.message });
 
-    return res.json({ success: true });
+    res.json({ success: true });
   } catch (err) {
-    return res.json({ success: false, error: err.message });
+    res.json({ success: false, error: err.message });
   }
 });
 
-// DAILY AUTO BACKUP — 2:00 AM
+// DAILY AUTO BACKUP — 2 AM
 cron.schedule(
   "0 2 * * *",
   () => {
@@ -110,7 +114,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// 2) ARCHIVE PREVIEW (FIXED — using PostgreSQL)
+// ARCHIVE PREVIEW
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -120,44 +124,45 @@ app.post("/api/archive-preview", async (req, res) => {
       return res.json({ success: false, error: "Missing dates" });
 
     const sql = `
-      select 
+      SELECT 
         item_code,
         item_name,
-        sum(purchase_qty) as purchase_qty,
-        sum(sale_qty) as sale_qty,
-        sum(return_qty) as return_qty
-      from (
-          select p.item_code, p.item_name, p.qty as purchase_qty, 0 as sale_qty, 0 as return_qty
-          from purchases p
-          where p.is_deleted = false
-            and p.purchase_date between '${start_date}' and '${end_date}'
+        SUM(purchase_qty) AS purchase_qty,
+        SUM(sale_qty) AS sale_qty,
+        SUM(return_qty) AS return_qty
+      FROM (
+        SELECT item_code, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+        FROM purchases
+        WHERE is_deleted = FALSE 
+          AND purchase_date BETWEEN $1 AND $2
 
-          union all
+        UNION ALL
 
-          select s.item_code, null, 0, s.qty, 0
-          from sales s
-          where s.is_deleted = false
-            and s.sale_date between '${start_date}' and '${end_date}'
+        SELECT item_code, NULL, 0, qty, 0
+        FROM sales
+        WHERE is_deleted = FALSE 
+          AND sale_date BETWEEN $1 AND $2
 
-          union all
+        UNION ALL
 
-          select r.item_code, null, 0, 0, r.return_qty
-          from sale_returns r
-          where r.created_at::date between '${start_date}' and '${end_date}'
+        SELECT item_code, NULL, 0, 0, return_qty
+        FROM sale_returns
+        WHERE created_at::date BETWEEN $1 AND $2
       ) t
-      group by item_code, item_name
-      order by item_code;
+      GROUP BY item_code, item_name
+      ORDER BY item_code;
     `;
 
-    const result = await pg.query(sql);
-    return res.json({ success: true, rows: result.rows });
+    const result = await pg.query(sql, [start_date, end_date]);
+
+    res.json({ success: true, rows: result.rows });
   } catch (err) {
-    return res.json({ success: false, error: err.message });
+    res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
-// 3) ARCHIVE TRANSFER (FIXED)
+// ARCHIVE TRANSFER
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -166,24 +171,23 @@ app.post("/api/archive-transfer", async (req, res) => {
     if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
 
-    // NOTE: You MUST create summary_view in Supabase
     const sql = `
-      insert into archive (item_code, item_name, purchase_qty, sale_qty, return_qty, date)
-      select item_code, item_name, purchase_qty, sale_qty, return_qty, now()::date
-      from summary_view
-      where date between '${start_date}' and '${end_date}';
+      INSERT INTO archive (item_code, item_name, purchase_qty, sale_qty, return_qty, date)
+      SELECT item_code, item_name, purchase_qty, sale_qty, return_qty, NOW()::date
+      FROM summary_view
+      WHERE date BETWEEN $1 AND $2;
     `;
 
-    await pg.query(sql);
+    await pg.query(sql, [start_date, end_date]);
 
-    return res.json({ success: true, message: "Transfer completed." });
+    res.json({ success: true });
   } catch (err) {
-    return res.json({ success: false, error: err.message });
+    res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
-// 4) ARCHIVE DELETE (FIXED)
+// ARCHIVE DELETE
 // =====================================================================
 app.post("/api/archive-delete", async (req, res) => {
   try {
@@ -192,29 +196,27 @@ app.post("/api/archive-delete", async (req, res) => {
     if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
 
-    await pg.query(`
-      delete from purchases 
-      where purchase_date between '${start_date}' and '${end_date}';
-    `);
+    await pg.query(
+      `DELETE FROM purchases WHERE purchase_date BETWEEN $1 AND $2`,
+      [start_date, end_date]
+    );
 
-    await pg.query(`
-      delete from sales 
-      where sale_date between '${start_date}' and '${end_date}';
-    `);
+    await pg.query(
+      `DELETE FROM sales WHERE sale_date BETWEEN $1 AND $2`,
+      [start_date, end_date]
+    );
 
-    await pg.query(`
-      delete from sale_returns 
-      where created_at::date between '${start_date}' and '${end_date}';
-    `);
+    await pg.query(
+      `DELETE FROM sale_returns WHERE created_at::date BETWEEN $1 AND $2`,
+      [start_date, end_date]
+    );
 
-    return res.json({ success: true });
+    res.json({ success: true });
   } catch (err) {
-    return res.json({ success: false, error: err.message });
+    res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port " + PORT);
-});
+app.listen(PORT, () => console.log("🚀 Server running on port " + PORT));
