@@ -2,24 +2,19 @@
   "name": "khadija-backup-api",
   "version": "1.0.0",
   "main": "server.js",
-  "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "1.35.7",
-    "archiver": "^5.3.1",
-    "cors": "^2.8.5",
-    "dayjs": "^1.11.9",
-    "dotenv": "^16.0.0",
+    "pg": "^8.11.3",
     "express": "^4.18.2",
+    "cors": "^2.8.5",
     "multer": "^1.4.5-lts.1",
-    "node-cron": "^4.2.1",
-    "pg": "^8.16.3",
-    "unzipper": "^0.10.11"
-  },
-  "engines": {
-    "node": ">=18"
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "@supabase/supabase-js": "^2.39.7",
+    "archiver": "^5.3.1",
+    "unzipper": "^0.10.11",
+    "dayjs": "^1.11.10"
   }
 }
