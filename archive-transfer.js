@@ -6,17 +6,16 @@ app.post("/api/archive-transfer", async (req, res) => {
       return res.json({ success: false, error: "Wrong password" });
 
     const sql = `
-      INSERT INTO archive (barcode, name, purchase_qty, sale_qty, return_qty, date)
-      SELECT barcode, name, purchase_qty, sale_qty, return_qty, NOW()::date
+      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
+      SELECT barcode, item_name, purchase_qty, sale_qty, return_qty, NOW()
       FROM summary_view
-      WHERE date BETWEEN $1 AND $2;
+      WHERE created_at::date BETWEEN $1 AND $2;
     `;
 
     await pg.query(sql, [start_date, end_date]);
 
-    return res.json({ success: true, message: "Archive transfer completed." });
-
+    res.json({ success: true, message: "Data transferred to archive!" });
   } catch (err) {
-    return res.json({ success: false, error: err.message });
+    res.json({ success: false, error: err.message });
   }
 });
