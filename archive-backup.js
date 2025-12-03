@@ -1,5 +1,5 @@
 // ===============================================
-// 2) ARCHIVE BACKUP API  (DOWNLOAD + BUCKET UPLOAD)
+// ARCHIVE BACKUP (ZIP + archive_backups bucket)
 // ===============================================
 const JSZip = require("jszip");
 
@@ -10,9 +10,7 @@ app.post("/api/archive-backup", async (req, res) => {
     if (!start_date || !end_date)
       return res.json({ success: false, error: "Missing dates" });
 
-    // ----------------------------------------------------
-    // Fetch records
-    // ----------------------------------------------------
+    // Fetch data
     const [purchases, sales, returns] = await Promise.all([
       supabase.from("purchases")
         .select("*")
@@ -30,9 +28,7 @@ app.post("/api/archive-backup", async (req, res) => {
         .lte("created_at", end_date)
     ]);
 
-    // ----------------------------------------------------
-    // Create ZIP
-    // ----------------------------------------------------
+    // ZIP file create
     const zip = new JSZip();
     zip.file("purchases.json", JSON.stringify(purchases.data || []));
     zip.file("sales.json", JSON.stringify(sales.data || []));
@@ -40,19 +36,21 @@ app.post("/api/archive-backup", async (req, res) => {
 
     const zipData = await zip.generateAsync({ type: "nodebuffer" });
 
-    // ----------------------------------------------------
-    // Upload to Supabase bucket: archive_backups
-    // ----------------------------------------------------
     const fileName = `archive_${start_date}_to_${end_date}.zip`;
 
-    await supabase.storage
+    // Upload ZIP to "archive_backups" bucket
+    const upload = await supabase.storage
       .from("archive_backups")
       .upload(fileName, zipData, {
         contentType: "application/zip",
-        upsert: true
+        upsert: true,
       });
 
-    // PC download
+    if (upload.error) {
+      return res.json({ success: false, error: upload.error.message });
+    }
+
+    // Send ZIP to PC
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
     res.send(zipData);
