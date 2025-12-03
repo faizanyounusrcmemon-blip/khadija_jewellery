@@ -25,12 +25,7 @@ pg.connect()
 
 const app = express();
 
-app.use(
-  cors({
-    origin: "*",
-  })
-);
-
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -38,7 +33,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.get("/", (req, res) => res.json({ ok: true }));
 
 // =====================================================================
-// BACKUP SYSTEM
+// DAILY BACKUP SYSTEM
 // =====================================================================
 app.post("/api/backup", async (req, res) => {
   const result = await doBackup();
@@ -99,7 +94,7 @@ app.post("/api/delete-backup", async (req, res) => {
   }
 });
 
-// DAILY AUTO BACKUP — 2 AM
+// AUTO BACKUP 2 AM
 cron.schedule(
   "0 2 * * *",
   () => {
@@ -110,7 +105,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// ARCHIVE PREVIEW (FINAL FIXED WITH item_name COLUMN)
+// ARCHIVE PREVIEW
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -158,7 +153,7 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE TRANSFER
+// ARCHIVE TRANSFER (FIXED — using created_at column)
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -168,15 +163,15 @@ app.post("/api/archive-transfer", async (req, res) => {
       return res.json({ success: false, error: "Wrong password" });
 
     const sql = `
-      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, date)
-      SELECT barcode, item_name, purchase_qty, sale_qty, return_qty, NOW()::date
+      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
+      SELECT barcode, item_name, purchase_qty, sale_qty, return_qty, NOW()
       FROM summary_view
       WHERE date BETWEEN $1 AND $2;
     `;
 
     await pg.query(sql, [start_date, end_date]);
 
-    res.json({ success: true });
+    res.json({ success: true, message: "Transfer Completed Successfully!" });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -207,7 +202,7 @@ app.post("/api/archive-delete", async (req, res) => {
       [start_date, end_date]
     );
 
-    res.json({ success: true });
+    res.json({ success: true, message: "Data Deleted Successfully!" });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
