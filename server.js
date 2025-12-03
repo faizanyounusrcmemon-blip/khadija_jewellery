@@ -14,7 +14,7 @@ const { Client } = require("pg");
 // PostgreSQL Connection
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
 });
 
 pg.connect()
@@ -104,7 +104,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// ARCHIVE PREVIEW — FIXED (barcode::text)
+// ARCHIVE PREVIEW  (یہ ویسا ہی رہے گا جیسا ابھی چل رہا ہے)
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -115,27 +115,27 @@ app.post("/api/archive-preview", async (req, res) => {
 
     const sql = `
       SELECT 
-        barcode::text AS barcode,
+        barcode,
         item_name,
         SUM(purchase_qty) AS purchase_qty,
         SUM(sale_qty) AS sale_qty,
         SUM(return_qty) AS return_qty
       FROM (
-        SELECT barcode::text, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+        SELECT barcode, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
         FROM purchases
         WHERE is_deleted = FALSE 
-        AND purchase_date BETWEEN $1 AND $2
+          AND purchase_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT barcode::text, item_name, 0, qty, 0
+        SELECT barcode, item_name, 0, qty, 0
         FROM sales
         WHERE is_deleted = FALSE 
-        AND sale_date BETWEEN $1 AND $2
+          AND sale_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT barcode::text, item_name, 0, 0, return_qty
+        SELECT barcode, item_name, 0, 0, return_qty
         FROM sale_returns
         WHERE created_at::date BETWEEN $1 AND $2
       ) t
@@ -152,7 +152,7 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE TRANSFER — FINAL FIXED
+// ARCHIVE TRANSFER (جو ابھی تمہارا چل رہا ہے) – فی الحال as-is چھوڑ رہے
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -162,16 +162,51 @@ app.post("/api/archive-transfer", async (req, res) => {
       return res.json({ success: false, error: "Wrong password" });
 
     const sql = `
-      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
+      INSERT INTO archive (
+        barcode,
+        item_name,
+        purchase_qty,
+        sale_qty,
+        return_qty,
+        date,
+        created_at
+      )
       SELECT 
         barcode,
         item_name,
         purchase_qty,
         sale_qty,
         return_qty,
+        $1::date,
         NOW()
-      FROM summary_view
-      WHERE final_date BETWEEN $1 AND $2;
+      FROM (
+        SELECT 
+          barcode,
+          item_name,
+          SUM(purchase_qty) AS purchase_qty,
+          SUM(sale_qty) AS sale_qty,
+          SUM(return_qty) AS return_qty
+        FROM (
+          SELECT barcode, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+          FROM purchases
+          WHERE is_deleted = FALSE 
+            AND purchase_date BETWEEN $1 AND $2
+
+          UNION ALL
+
+          SELECT barcode, item_name, 0, qty, 0
+          FROM sales
+          WHERE is_deleted = FALSE 
+            AND sale_date BETWEEN $1 AND $2
+
+          UNION ALL
+
+          SELECT barcode, item_name, 0, 0, return_qty
+          FROM sale_returns
+          WHERE created_at::date BETWEEN $1 AND $2
+        ) x
+        GROUP BY barcode, item_name
+      ) y;
     `;
 
     const result = await pg.query(sql, [start_date, end_date]);
@@ -179,7 +214,7 @@ app.post("/api/archive-transfer", async (req, res) => {
     res.json({
       success: true,
       message: "Transfer Completed Successfully!",
-      inserted: result.rowCount
+      inserted: result.rowCount,
     });
   } catch (err) {
     res.json({ success: false, error: err.message });
@@ -213,6 +248,70 @@ app.post("/api/archive-delete", async (req, res) => {
 
     res.json({ success: true, message: "Data Deleted Successfully!" });
   } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+
+// =====================================================================
+// ⭐ NEW: STOCK SNAPSHOT (for reports)  ← یہ نیا حصہ ہے
+// =====================================================================
+app.post("/api/stock-snapshot", async (req, res) => {
+  try {
+    let { snap_date, password } = req.body;
+
+    if (password !== "faizanyounus2122")
+      return res.json({ success: false, error: "Wrong password" });
+
+    // اگر front-end سے date نہ آئے تو آج کی date لے لو
+    if (!snap_date) {
+      snap_date = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    }
+
+    // پہلے اس دن کے purane snapshot delete (تاکہ duplicate نہ ہو)
+    await pg.query(`DELETE FROM stock_snapshot WHERE snap_date = $1`, [
+      snap_date,
+    ]);
+
+    const sql = `
+      INSERT INTO stock_snapshot (snap_date, barcode, item_name, stock_qty)
+      SELECT 
+        $1::date AS snap_date,
+        barcode,
+        item_name,
+        SUM(purchase_qty) - SUM(sale_qty) + SUM(return_qty) AS stock_qty
+      FROM (
+        SELECT barcode, item_name, qty AS purchase_qty, 0::numeric AS sale_qty, 0::numeric AS return_qty
+        FROM purchases
+        WHERE is_deleted = FALSE 
+          AND purchase_date <= $1
+
+        UNION ALL
+
+        SELECT barcode, item_name, 0::numeric, qty, 0::numeric
+        FROM sales
+        WHERE is_deleted = FALSE 
+          AND sale_date <= $1
+
+        UNION ALL
+
+        SELECT barcode, item_name, 0::numeric, 0::numeric, return_qty
+        FROM sale_returns
+        WHERE created_at::date <= $1
+      ) t
+      GROUP BY barcode, item_name;
+    `;
+
+    const result = await pg.query(sql, [snap_date]);
+
+    res.json({
+      success: true,
+      message: "Snapshot created!",
+      snap_date,
+      rows: result.rowCount,
+    });
+  } catch (err) {
+    console.error("snapshot error:", err);
     res.json({ success: false, error: err.message });
   }
 });
