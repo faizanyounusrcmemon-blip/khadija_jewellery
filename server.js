@@ -104,7 +104,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// ARCHIVE PREVIEW
+// ARCHIVE PREVIEW — FIXED (barcode::text)
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -115,27 +115,27 @@ app.post("/api/archive-preview", async (req, res) => {
 
     const sql = `
       SELECT 
-        barcode,
+        barcode::text AS barcode,
         item_name,
         SUM(purchase_qty) AS purchase_qty,
         SUM(sale_qty) AS sale_qty,
         SUM(return_qty) AS return_qty
       FROM (
-        SELECT barcode, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+        SELECT barcode::text, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
         FROM purchases
         WHERE is_deleted = FALSE 
         AND purchase_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT barcode, item_name, 0, qty, 0
+        SELECT barcode::text, item_name, 0, qty, 0
         FROM sales
         WHERE is_deleted = FALSE 
         AND sale_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT barcode, item_name, 0, 0, return_qty
+        SELECT barcode::text, item_name, 0, 0, return_qty
         FROM sale_returns
         WHERE created_at::date BETWEEN $1 AND $2
       ) t
@@ -152,7 +152,7 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE TRANSFER — FINAL FIXED VERSION
+// ARCHIVE TRANSFER — FINAL FIXED
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -176,10 +176,10 @@ app.post("/api/archive-transfer", async (req, res) => {
 
     const result = await pg.query(sql, [start_date, end_date]);
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Transfer Completed Successfully!",
-      inserted: result.rowCount 
+      inserted: result.rowCount
     });
   } catch (err) {
     res.json({ success: false, error: err.message });
