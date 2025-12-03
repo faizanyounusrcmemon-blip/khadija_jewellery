@@ -11,9 +11,7 @@ const supabase = require("./db");
 
 const { Client } = require("pg");
 
-// --------------------------------------
 // PostgreSQL Connection
-// --------------------------------------
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false }
@@ -24,7 +22,6 @@ pg.connect()
   .catch((err) => console.error("❌ PG Error:", err));
 
 const app = express();
-
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
@@ -33,7 +30,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.get("/", (req, res) => res.json({ ok: true }));
 
 // =====================================================================
-// DAILY BACKUP SYSTEM
+// BACKUP SYSTEM
 // =====================================================================
 app.post("/api/backup", async (req, res) => {
   const result = await doBackup();
@@ -54,6 +51,7 @@ app.post("/api/restore-from-bucket", upload.any(), async (req, res) => {
   }
 });
 
+// Download backup
 app.get("/api/download-backup/:name", async (req, res) => {
   try {
     const name = req.params.name;
@@ -75,6 +73,7 @@ app.get("/api/download-backup/:name", async (req, res) => {
   }
 });
 
+// Delete backup
 app.post("/api/delete-backup", async (req, res) => {
   try {
     const { fileName, password } = req.body;
@@ -94,7 +93,7 @@ app.post("/api/delete-backup", async (req, res) => {
   }
 });
 
-// AUTO BACKUP 2 AM
+// AUTO BACKUP (2 AM)
 cron.schedule(
   "0 2 * * *",
   () => {
@@ -125,14 +124,14 @@ app.post("/api/archive-preview", async (req, res) => {
         SELECT barcode, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
         FROM purchases
         WHERE is_deleted = FALSE 
-          AND purchase_date BETWEEN $1 AND $2
+        AND purchase_date BETWEEN $1 AND $2
 
         UNION ALL
 
         SELECT barcode, item_name, 0, qty, 0
         FROM sales
         WHERE is_deleted = FALSE 
-          AND sale_date BETWEEN $1 AND $2
+        AND sale_date BETWEEN $1 AND $2
 
         UNION ALL
 
@@ -153,7 +152,7 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE TRANSFER (FINAL & FIXED)
+// ARCHIVE TRANSFER — FINAL FIXED VERSION
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -164,14 +163,24 @@ app.post("/api/archive-transfer", async (req, res) => {
 
     const sql = `
       INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
-      SELECT barcode, item_name, purchase_qty, sale_qty, return_qty, NOW()
+      SELECT 
+        barcode,
+        item_name,
+        purchase_qty,
+        sale_qty,
+        return_qty,
+        NOW()
       FROM summary_view
       WHERE final_date BETWEEN $1 AND $2;
     `;
 
-    await pg.query(sql, [start_date, end_date]);
+    const result = await pg.query(sql, [start_date, end_date]);
 
-    res.json({ success: true, message: "Transfer Completed Successfully!" });
+    res.json({ 
+      success: true, 
+      message: "Transfer Completed Successfully!",
+      inserted: result.rowCount 
+    });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
