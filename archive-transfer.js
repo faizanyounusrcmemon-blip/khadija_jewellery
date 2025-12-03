@@ -1,13 +1,9 @@
-// =====================================================================
-// ARCHIVE TRANSFER — FINAL FIXED VERSION
-// =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
     const { start_date, end_date, password } = req.body;
 
-    if (password !== "faizanyounus2122") {
+    if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
-    }
 
     const sql = `
       INSERT INTO archive (
@@ -20,12 +16,12 @@ app.post("/api/archive-transfer", async (req, res) => {
         created_at
       )
       SELECT 
-        barcode::bigint,   -- 🔥 یہاں cast کیا bigint میں
+        barcode::bigint,      -- 🔥 TYPE FIXED (text → bigint)
         item_name,
         purchase_qty,
         sale_qty,
         return_qty,
-        final_date,        -- summary_view سے date
+        final_date,           -- 🔥 date column
         NOW()
       FROM summary_view
       WHERE final_date BETWEEN $1 AND $2;
@@ -36,8 +32,9 @@ app.post("/api/archive-transfer", async (req, res) => {
     res.json({
       success: true,
       message: "Data transferred to archive!",
-      inserted: result.rowCount,
+      inserted: result.rowCount
     });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
