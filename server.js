@@ -12,7 +12,7 @@ const supabase = require("./db");
 const { Client } = require("pg");
 
 // --------------------------------------
-// ⭐ PostgreSQL Connection
+// PostgreSQL Connection
 // --------------------------------------
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
@@ -25,18 +25,14 @@ pg.connect()
 
 const app = express();
 
-// --------------------------------------
-// ⭐ CORS FIXED
-// --------------------------------------
 app.use(
   cors({
-    origin: "*",   // allow all origins
+    origin: "*",
   })
 );
 
 app.use(express.json());
 
-// --------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.get("/", (req, res) => res.json({ ok: true }));
@@ -91,9 +87,7 @@ app.post("/api/delete-backup", async (req, res) => {
     if (password !== "faizanyounus")
       return res.json({ success: false, error: "Invalid password" });
 
-    const { error } = await supabase.storage
-      .from("backups")
-      .remove([fileName]);
+    const { error } = await supabase.storage.from("backups").remove([fileName]);
 
     if (error) return res.json({ success: false, error: error.message });
 
@@ -114,7 +108,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// ARCHIVE PREVIEW
+// ARCHIVE PREVIEW (FINAL VERSION ACCORDING TO YOUR DB)
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -125,32 +119,32 @@ app.post("/api/archive-preview", async (req, res) => {
 
     const sql = `
       SELECT 
-        item_code,
-        item_name,
+        barcode,
+        name,
         SUM(purchase_qty) AS purchase_qty,
         SUM(sale_qty) AS sale_qty,
         SUM(return_qty) AS return_qty
       FROM (
-        SELECT item_code, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+        SELECT barcode, name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
         FROM purchases
         WHERE is_deleted = FALSE 
           AND purchase_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT item_code, NULL, 0, qty, 0
+        SELECT barcode, name, 0, qty, 0
         FROM sales
         WHERE is_deleted = FALSE 
           AND sale_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT item_code, NULL, 0, 0, return_qty
+        SELECT barcode, name, 0, 0, return_qty
         FROM sale_returns
         WHERE created_at::date BETWEEN $1 AND $2
       ) t
-      GROUP BY item_code, item_name
-      ORDER BY item_code;
+      GROUP BY barcode, name
+      ORDER BY barcode;
     `;
 
     const result = await pg.query(sql, [start_date, end_date]);
@@ -172,8 +166,8 @@ app.post("/api/archive-transfer", async (req, res) => {
       return res.json({ success: false, error: "Wrong password" });
 
     const sql = `
-      INSERT INTO archive (item_code, item_name, purchase_qty, sale_qty, return_qty, date)
-      SELECT item_code, item_name, purchase_qty, sale_qty, return_qty, NOW()::date
+      INSERT INTO archive (barcode, name, purchase_qty, sale_qty, return_qty, date)
+      SELECT barcode, name, purchase_qty, sale_qty, return_qty, NOW()::date
       FROM summary_view
       WHERE date BETWEEN $1 AND $2;
     `;
