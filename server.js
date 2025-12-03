@@ -87,7 +87,9 @@ app.post("/api/delete-backup", async (req, res) => {
     if (password !== "faizanyounus")
       return res.json({ success: false, error: "Invalid password" });
 
-    const { error } = await supabase.storage.from("backups").remove([fileName]);
+    const { error } = await supabase.storage
+      .from("backups")
+      .remove([fileName]);
 
     if (error) return res.json({ success: false, error: error.message });
 
@@ -108,7 +110,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// ARCHIVE PREVIEW (FINAL VERSION ACCORDING TO YOUR DB)
+// ARCHIVE PREVIEW (FINAL FIXED WITH item_name COLUMN)
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -120,30 +122,30 @@ app.post("/api/archive-preview", async (req, res) => {
     const sql = `
       SELECT 
         barcode,
-        name,
+        item_name,
         SUM(purchase_qty) AS purchase_qty,
         SUM(sale_qty) AS sale_qty,
         SUM(return_qty) AS return_qty
       FROM (
-        SELECT barcode, name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+        SELECT barcode, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
         FROM purchases
         WHERE is_deleted = FALSE 
           AND purchase_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT barcode, name, 0, qty, 0
+        SELECT barcode, item_name, 0, qty, 0
         FROM sales
         WHERE is_deleted = FALSE 
           AND sale_date BETWEEN $1 AND $2
 
         UNION ALL
 
-        SELECT barcode, name, 0, 0, return_qty
+        SELECT barcode, item_name, 0, 0, return_qty
         FROM sale_returns
         WHERE created_at::date BETWEEN $1 AND $2
       ) t
-      GROUP BY barcode, name
+      GROUP BY barcode, item_name
       ORDER BY barcode;
     `;
 
@@ -166,8 +168,8 @@ app.post("/api/archive-transfer", async (req, res) => {
       return res.json({ success: false, error: "Wrong password" });
 
     const sql = `
-      INSERT INTO archive (barcode, name, purchase_qty, sale_qty, return_qty, date)
-      SELECT barcode, name, purchase_qty, sale_qty, return_qty, NOW()::date
+      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, date)
+      SELECT barcode, item_name, purchase_qty, sale_qty, return_qty, NOW()::date
       FROM summary_view
       WHERE date BETWEEN $1 AND $2;
     `;
