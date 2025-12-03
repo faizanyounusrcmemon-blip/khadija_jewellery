@@ -153,7 +153,7 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE TRANSFER (FIXED — using created_at column)
+// ARCHIVE TRANSFER (FINAL & FIXED)
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -166,7 +166,7 @@ app.post("/api/archive-transfer", async (req, res) => {
       INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
       SELECT barcode, item_name, purchase_qty, sale_qty, return_qty, NOW()
       FROM summary_view
-      WHERE date BETWEEN $1 AND $2;
+      WHERE final_date BETWEEN $1 AND $2;
     `;
 
     await pg.query(sql, [start_date, end_date]);
