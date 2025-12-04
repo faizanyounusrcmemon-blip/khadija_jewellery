@@ -34,6 +34,7 @@ app.get("/", (req, res) => res.json({ ok: true }));
 // =====================================================================
 // BACKUP SYSTEM
 // =====================================================================
+
 app.post("/api/backup", async (req, res) => {
   const result = await doBackup();
   res.json(result);
@@ -106,7 +107,7 @@ cron.schedule(
 );
 
 // =====================================================================
-// ARCHIVE PREVIEW — FIXED (barcode::text)
+// ARCHIVE PREVIEW
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
@@ -154,7 +155,7 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE TRANSFER — FINAL FIXED
+// ARCHIVE TRANSFER
 // =====================================================================
 app.post("/api/archive-transfer", async (req, res) => {
   try {
@@ -220,29 +221,31 @@ app.post("/api/archive-delete", async (req, res) => {
 });
 
 // =====================================================================
-// COMMON STOCK QUERY (preview + snapshot دونوں کیلئے ایک ہی لاجک)
+// STOCK SNAPSHOT SHARED QUERY
 // =====================================================================
 const STOCK_SNAPSHOT_SQL = `
   SELECT 
     i.barcode::text AS barcode,
     i.item_name,
+
     COALESCE(p.total_purchase, 0)
       - COALESCE(s.total_sale, 0)
-      - COALESCE(r.total_return, 0)
+      + COALESCE(r.total_return, 0)
     AS stock_qty
+
   FROM items i
 
   LEFT JOIN (
     SELECT barcode::text AS barcode, SUM(qty) AS total_purchase
     FROM purchases
-    WHERE purchase_date <= $1 AND is_deleted = FALSE
+    WHERE is_deleted = FALSE AND purchase_date <= $1
     GROUP BY barcode::text
   ) p ON p.barcode = i.barcode::text
 
   LEFT JOIN (
     SELECT barcode::text AS barcode, SUM(qty) AS total_sale
     FROM sales
-    WHERE sale_date <= $1 AND is_deleted = FALSE
+    WHERE is_deleted = FALSE AND sale_date <= $1
     GROUP BY barcode::text
   ) s ON s.barcode = i.barcode::text
 
@@ -255,33 +258,32 @@ const STOCK_SNAPSHOT_SQL = `
 `;
 
 // =====================================================================
-// SNAPSHOT PREVIEW  (صرف دیکھنے کیلئے، DB میں کچھ save نہیں ہوتا)
+// SNAPSHOT PREVIEW — No Save
 // =====================================================================
 app.post("/api/snapshot-preview", async (req, res) => {
   try {
-    const { start_date, end_date } = req.body;
+    const { end_date } = req.body;
 
-    // ہم صرف end_date سے Stock کی پوزیشن calculate کر رہے ہیں
     if (!end_date)
       return res.json({ success: false, error: "End date is required" });
 
     const result = await pg.query(STOCK_SNAPSHOT_SQL, [end_date]);
 
-    // zero stock چھپا دو
     const rows = result.rows.filter((r) => Number(r.stock_qty) !== 0);
 
     res.json({ success: true, rows });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
-// SNAPSHOT CREATE  (stock_snapshots table میں save)
+// SNAPSHOT CREATE — Save to DB
 // =====================================================================
 app.post("/api/snapshot-create", async (req, res) => {
   try {
-    const { start_date, end_date, password } = req.body;
+    const { end_date, password } = req.body;
 
     if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
@@ -289,7 +291,6 @@ app.post("/api/snapshot-create", async (req, res) => {
     if (!end_date)
       return res.json({ success: false, error: "End date is required" });
 
-    // ایک ہی query سے insert کر دو (loop کی ضرورت نہیں)
     const sqlInsert = `
       INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty)
       SELECT 
@@ -303,15 +304,14 @@ app.post("/api/snapshot-create", async (req, res) => {
       WHERE q.stock_qty <> 0;
     `;
 
-    // STOCK_SNAPSHOT_SQL میں 1 parameter ہے (end_date)
-    // outer INSERT میں بھی snap_date کیلئے $1 use ہو رہا ہے، اس لئے ہم دو بار end_date بھیج رہے ہیں:
-    const result = await pg.query(sqlInsert, [end_date, end_date]);
+    const result = await pg.query(sqlInsert, [end_date]);
 
     res.json({
       success: true,
       message: "Snapshot created!",
       inserted: result.rowCount,
     });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
