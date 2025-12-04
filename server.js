@@ -252,6 +252,65 @@ app.post("/api/archive-delete", async (req, res) => {
   }
 });
 
+app.post("/api/snapshot-create", async (req, res) => {
+  try {
+    const { start_date, end_date, password } = req.body;
+
+    if (password !== "faizanyounus2122")
+      return res.json({ success: false, error: "Wrong password" });
+
+    // --- آج کے دن کا stock summary calculate کرو ---
+    const sql = `
+      SELECT 
+        i.barcode::text AS barcode,
+        i.item_name,
+        COALESCE(p.total_purchase, 0) 
+          - COALESCE(s.total_sale, 0)
+          - COALESCE(r.total_return, 0)
+        AS stock_qty
+      FROM items i
+
+      LEFT JOIN (
+        SELECT barcode::text AS barcode, SUM(qty) AS total_purchase
+        FROM purchases
+        WHERE purchase_date <= $2 AND is_deleted = FALSE
+        GROUP BY barcode::text
+      ) p ON p.barcode = i.barcode::text
+
+      LEFT JOIN (
+        SELECT barcode::text AS barcode, SUM(qty) AS total_sale
+        FROM sales
+        WHERE sale_date <= $2 AND is_deleted = FALSE
+        GROUP BY barcode::text
+      ) s ON s.barcode = i.barcode::text
+
+      LEFT JOIN (
+        SELECT barcode::text AS barcode, SUM(return_qty) AS total_return
+        FROM sale_returns
+        WHERE created_at::date <= $2
+        GROUP BY barcode::text
+      ) r ON r.barcode = i.barcode::text
+    `;
+
+    const result = await pg.query(sql, [start_date, end_date]);
+
+    // --- Insert snapshot into table ---
+    for (const row of result.rows) {
+      await pg.query(
+        `INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty) 
+         VALUES ($1, $2, $3, $4)`,
+        [end_date, row.barcode, row.item_name, row.stock_qty]
+      );
+    }
+
+    res.json({ success: true, message: "Snapshot created!", inserted: result.rowCount });
+
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+
 
 // =====================================================================
 // ⭐ NEW: STOCK SNAPSHOT (for reports)  ← یہ نیا حصہ ہے
