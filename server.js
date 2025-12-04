@@ -1,3 +1,4 @@
+// server.js
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -11,9 +12,9 @@ const supabase = require("./db");
 
 const { Client } = require("pg");
 
-// =====================================================================
+// --------------------------------------
 // PostgreSQL Connection
-// =====================================================================
+// --------------------------------------
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false },
@@ -23,32 +24,28 @@ pg.connect()
   .then(() => console.log("✅ PostgreSQL connected"))
   .catch((err) => console.error("❌ PG Error:", err));
 
-// =====================================================================
-// EXPRESS + CORS (FINAL WORKING VERSION)
-// =====================================================================
 const app = express();
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+// =====================================================
+// 🔥 SUPER CORS FIX (KOYEB + LOCALHOST دونوں کیلئے)
+// =====================================================
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*"); // allow all origins
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
 
-  // When frontend will go to vercel, just replace this with real domain
-  "https://your-vercel-domain.vercel.app",
-];
+  // Preflight کو یہیں ختم کر دو
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error("CORS Blocked: " + origin), false);
-    },
-    methods: "GET,POST,PUT,DELETE,OPTIONS",
-    allowedHeaders: "Content-Type, Authorization",
-  })
-);
-
-app.options("*", cors());
+// ساتھ میں normal CORS بھی رہنے دو
+app.use(cors());
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -173,7 +170,6 @@ app.post("/api/archive-preview", async (req, res) => {
     const result = await pg.query(sql, [start_date, end_date]);
 
     res.json({ success: true, rows: result.rows });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -209,7 +205,6 @@ app.post("/api/archive-transfer", async (req, res) => {
       message: "Transfer Completed Successfully!",
       inserted: result.rowCount,
     });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -241,14 +236,13 @@ app.post("/api/archive-delete", async (req, res) => {
     );
 
     res.json({ success: true, message: "Data Deleted Successfully!" });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
-// STOCK SNAPSHOT QUERY (Shared)
+// STOCK SNAPSHOT SHARED QUERY
 // =====================================================================
 const STOCK_SNAPSHOT_SQL = `
   SELECT 
@@ -285,7 +279,7 @@ const STOCK_SNAPSHOT_SQL = `
 `;
 
 // =====================================================================
-// SNAPSHOT PREVIEW
+// SNAPSHOT PREVIEW — No Save
 // =====================================================================
 app.post("/api/snapshot-preview", async (req, res) => {
   try {
@@ -299,14 +293,13 @@ app.post("/api/snapshot-preview", async (req, res) => {
     const rows = result.rows.filter((r) => Number(r.stock_qty) !== 0);
 
     res.json({ success: true, rows });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
-// SNAPSHOT CREATE
+// SNAPSHOT CREATE — Save to DB
 // =====================================================================
 app.post("/api/snapshot-create", async (req, res) => {
   try {
@@ -338,7 +331,6 @@ app.post("/api/snapshot-create", async (req, res) => {
       message: "Snapshot created!",
       inserted: result.rowCount,
     });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -346,6 +338,4 @@ app.post("/api/snapshot-create", async (req, res) => {
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () =>
-  console.log("🚀 Server running on port " + PORT)
-);
+app.listen(PORT, () => console.log("🚀 Server running on port " + PORT));
