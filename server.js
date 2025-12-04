@@ -11,10 +11,12 @@ const supabase = require("./db");
 
 const { Client } = require("pg");
 
+// --------------------------------------
 // PostgreSQL Connection
+// --------------------------------------
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
 });
 
 pg.connect()
@@ -124,14 +126,14 @@ app.post("/api/archive-preview", async (req, res) => {
         SELECT barcode::text, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
         FROM purchases
         WHERE is_deleted = FALSE 
-        AND purchase_date BETWEEN $1 AND $2
+          AND purchase_date BETWEEN $1 AND $2
 
         UNION ALL
 
         SELECT barcode::text, item_name, 0, qty, 0
         FROM sales
         WHERE is_deleted = FALSE 
-        AND sale_date BETWEEN $1 AND $2
+          AND sale_date BETWEEN $1 AND $2
 
         UNION ALL
 
@@ -179,7 +181,7 @@ app.post("/api/archive-transfer", async (req, res) => {
     res.json({
       success: true,
       message: "Transfer Completed Successfully!",
-      inserted: result.rowCount
+      inserted: result.rowCount,
     });
   } catch (err) {
     res.json({ success: false, error: err.message });
@@ -217,6 +219,66 @@ app.post("/api/archive-delete", async (req, res) => {
   }
 });
 
+// =====================================================================
+// COMMON STOCK QUERY (preview + snapshot دونوں کیلئے ایک ہی لاجک)
+// =====================================================================
+const STOCK_SNAPSHOT_SQL = `
+  SELECT 
+    i.barcode::text AS barcode,
+    i.item_name,
+    COALESCE(p.total_purchase, 0)
+      - COALESCE(s.total_sale, 0)
+      - COALESCE(r.total_return, 0)
+    AS stock_qty
+  FROM items i
+
+  LEFT JOIN (
+    SELECT barcode::text AS barcode, SUM(qty) AS total_purchase
+    FROM purchases
+    WHERE purchase_date <= $1 AND is_deleted = FALSE
+    GROUP BY barcode::text
+  ) p ON p.barcode = i.barcode::text
+
+  LEFT JOIN (
+    SELECT barcode::text AS barcode, SUM(qty) AS total_sale
+    FROM sales
+    WHERE sale_date <= $1 AND is_deleted = FALSE
+    GROUP BY barcode::text
+  ) s ON s.barcode = i.barcode::text
+
+  LEFT JOIN (
+    SELECT barcode::text AS barcode, SUM(return_qty) AS total_return
+    FROM sale_returns
+    WHERE created_at::date <= $1
+    GROUP BY barcode::text
+  ) r ON r.barcode = i.barcode::text
+`;
+
+// =====================================================================
+// SNAPSHOT PREVIEW  (صرف دیکھنے کیلئے، DB میں کچھ save نہیں ہوتا)
+// =====================================================================
+app.post("/api/snapshot-preview", async (req, res) => {
+  try {
+    const { start_date, end_date } = req.body;
+
+    // ہم صرف end_date سے Stock کی پوزیشن calculate کر رہے ہیں
+    if (!end_date)
+      return res.json({ success: false, error: "End date is required" });
+
+    const result = await pg.query(STOCK_SNAPSHOT_SQL, [end_date]);
+
+    // zero stock چھپا دو
+    const rows = result.rows.filter((r) => Number(r.stock_qty) !== 0);
+
+    res.json({ success: true, rows });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// =====================================================================
+// SNAPSHOT CREATE  (stock_snapshots table میں save)
+// =====================================================================
 app.post("/api/snapshot-create", async (req, res) => {
   try {
     const { start_date, end_date, password } = req.body;
@@ -224,57 +286,36 @@ app.post("/api/snapshot-create", async (req, res) => {
     if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
 
-    // --- آج کے دن کا stock summary calculate کرو ---
-    const sql = `
+    if (!end_date)
+      return res.json({ success: false, error: "End date is required" });
+
+    // ایک ہی query سے insert کر دو (loop کی ضرورت نہیں)
+    const sqlInsert = `
+      INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty)
       SELECT 
-        i.barcode::text AS barcode,
-        i.item_name,
-        COALESCE(p.total_purchase, 0) 
-          - COALESCE(s.total_sale, 0)
-          - COALESCE(r.total_return, 0)
-        AS stock_qty
-      FROM items i
-
-      LEFT JOIN (
-        SELECT barcode::text AS barcode, SUM(qty) AS total_purchase
-        FROM purchases
-        WHERE purchase_date <= $2 AND is_deleted = FALSE
-        GROUP BY barcode::text
-      ) p ON p.barcode = i.barcode::text
-
-      LEFT JOIN (
-        SELECT barcode::text AS barcode, SUM(qty) AS total_sale
-        FROM sales
-        WHERE sale_date <= $2 AND is_deleted = FALSE
-        GROUP BY barcode::text
-      ) s ON s.barcode = i.barcode::text
-
-      LEFT JOIN (
-        SELECT barcode::text AS barcode, SUM(return_qty) AS total_return
-        FROM sale_returns
-        WHERE created_at::date <= $2
-        GROUP BY barcode::text
-      ) r ON r.barcode = i.barcode::text
+        $1::date AS snap_date,
+        q.barcode,
+        q.item_name,
+        q.stock_qty
+      FROM (
+        ${STOCK_SNAPSHOT_SQL}
+      ) AS q
+      WHERE q.stock_qty <> 0;
     `;
 
-    const result = await pg.query(sql, [start_date, end_date]);
+    // STOCK_SNAPSHOT_SQL میں 1 parameter ہے (end_date)
+    // outer INSERT میں بھی snap_date کیلئے $1 use ہو رہا ہے، اس لئے ہم دو بار end_date بھیج رہے ہیں:
+    const result = await pg.query(sqlInsert, [end_date, end_date]);
 
-    // --- Insert snapshot into table ---
-    for (const row of result.rows) {
-      await pg.query(
-        `INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty) 
-         VALUES ($1, $2, $3, $4)`,
-        [end_date, row.barcode, row.item_name, row.stock_qty]
-      );
-    }
-
-    res.json({ success: true, message: "Snapshot created!", inserted: result.rowCount });
-
+    res.json({
+      success: true,
+      message: "Snapshot created!",
+      inserted: result.rowCount,
+    });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
-
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
