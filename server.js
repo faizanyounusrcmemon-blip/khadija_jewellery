@@ -11,9 +11,9 @@ const supabase = require("./db");
 
 const { Client } = require("pg");
 
-// --------------------------------------
+// =====================================================================
 // PostgreSQL Connection
-// --------------------------------------
+// =====================================================================
 const pg = new Client({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false },
@@ -23,8 +23,32 @@ pg.connect()
   .then(() => console.log("✅ PostgreSQL connected"))
   .catch((err) => console.error("❌ PG Error:", err));
 
+// =====================================================================
+// EXPRESS + CORS (FINAL WORKING VERSION)
+// =====================================================================
 const app = express();
-app.use(cors({ origin: "*" }));
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+
+  // When frontend will go to vercel, just replace this with real domain
+  "https://your-vercel-domain.vercel.app",
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS Blocked: " + origin), false);
+    },
+    methods: "GET,POST,PUT,DELETE,OPTIONS",
+    allowedHeaders: "Content-Type, Authorization",
+  })
+);
+
+app.options("*", cors());
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -149,6 +173,7 @@ app.post("/api/archive-preview", async (req, res) => {
     const result = await pg.query(sql, [start_date, end_date]);
 
     res.json({ success: true, rows: result.rows });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -184,6 +209,7 @@ app.post("/api/archive-transfer", async (req, res) => {
       message: "Transfer Completed Successfully!",
       inserted: result.rowCount,
     });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -215,13 +241,14 @@ app.post("/api/archive-delete", async (req, res) => {
     );
 
     res.json({ success: true, message: "Data Deleted Successfully!" });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
 
 // =====================================================================
-// STOCK SNAPSHOT SHARED QUERY
+// STOCK SNAPSHOT QUERY (Shared)
 // =====================================================================
 const STOCK_SNAPSHOT_SQL = `
   SELECT 
@@ -258,7 +285,7 @@ const STOCK_SNAPSHOT_SQL = `
 `;
 
 // =====================================================================
-// SNAPSHOT PREVIEW — No Save
+// SNAPSHOT PREVIEW
 // =====================================================================
 app.post("/api/snapshot-preview", async (req, res) => {
   try {
@@ -279,7 +306,7 @@ app.post("/api/snapshot-preview", async (req, res) => {
 });
 
 // =====================================================================
-// SNAPSHOT CREATE — Save to DB
+// SNAPSHOT CREATE
 // =====================================================================
 app.post("/api/snapshot-create", async (req, res) => {
   try {
@@ -319,4 +346,6 @@ app.post("/api/snapshot-create", async (req, res) => {
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log("🚀 Server running on port " + PORT));
+app.listen(PORT, () =>
+  console.log("🚀 Server running on port " + PORT)
+);
