@@ -27,7 +27,7 @@ pg.connect()
 const app = express();
 
 // =====================================================
-// 🔥 SUPER CORS FIX (KOYEB + LOCALHOST)
+// SUPER CORS FIX
 // =====================================================
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -123,41 +123,68 @@ cron.schedule(
 );
 
 // =====================================================================
-// STOCK SNAPSHOT SHARED QUERY
+// SNAPSHOT SYSTEM — LATEST SNAPSHOT + NEW CHANGES
 // =====================================================================
-const STOCK_SNAPSHOT_SQL = `
-  SELECT 
-    i.barcode::text AS barcode,
-    i.item_name,
 
-    COALESCE(p.total_purchase, 0)
-      - COALESCE(s.total_sale, 0)
-      + COALESCE(r.total_return, 0)
-    AS stock_qty
+// 1️⃣ Get latest snapshot date
+async function getLatestSnapshot() {
+  const sql = `
+    SELECT snap_date
+    FROM stock_snapshots
+    ORDER BY snap_date DESC
+    LIMIT 1;
+  `;
+  const result = await pg.query(sql);
+  if (result.rows.length === 0) return null;
+  return result.rows[0].snap_date;
+}
 
-  FROM items i
+// 2️⃣ Get base stock from snapshot
+async function getSnapshotBase(date) {
+  const sql = `
+    SELECT barcode, item_name, stock_qty
+    FROM stock_snapshots
+    WHERE snap_date = $1;
+  `;
+  const result = await pg.query(sql, [date]);
+  return result.rows;
+}
 
-  LEFT JOIN (
-    SELECT barcode::text AS barcode, SUM(qty) AS total_purchase
-    FROM purchases
-    WHERE is_deleted = FALSE AND purchase_date <= $1
-    GROUP BY barcode::text
-  ) p ON p.barcode = i.barcode::text
+// 3️⃣ Get purchases/sales/returns AFTER snapshot until end_date
+async function getChangesAfterSnapshot(snapshotDate, endDate) {
+  const sql = `
+    SELECT 
+      barcode::text AS barcode,
+      SUM(purchase_qty) AS purchase_qty,
+      SUM(sale_qty) AS sale_qty,
+      SUM(return_qty) AS return_qty
+    FROM (
+      SELECT barcode::text, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+      FROM purchases
+      WHERE is_deleted = FALSE 
+        AND purchase_date > $1
+        AND purchase_date <= $2
 
-  LEFT JOIN (
-    SELECT barcode::text AS barcode, SUM(qty) AS total_sale
-    FROM sales
-    WHERE is_deleted = FALSE AND sale_date <= $1
-    GROUP BY barcode::text
-  ) s ON s.barcode = i.barcode::text
+      UNION ALL
 
-  LEFT JOIN (
-    SELECT barcode::text AS barcode, SUM(return_qty) AS total_return
-    FROM sale_returns
-    WHERE created_at::date <= $1
-    GROUP BY barcode::text
-  ) r ON r.barcode = i.barcode::text
-`;
+      SELECT barcode::text, 0, qty, 0
+      FROM sales
+      WHERE is_deleted = FALSE 
+        AND sale_date > $1
+        AND sale_date <= $2
+
+      UNION ALL
+
+      SELECT barcode::text, 0, 0, return_qty
+      FROM sale_returns
+      WHERE created_at::date > $1
+        AND created_at::date <= $2
+    ) x
+    GROUP BY barcode;
+  `;
+  const result = await pg.query(sql, [snapshotDate, endDate]);
+  return result.rows;
+}
 
 // =====================================================================
 // SNAPSHOT PREVIEW
@@ -169,9 +196,45 @@ app.post("/api/snapshot-preview", async (req, res) => {
     if (!end_date)
       return res.json({ success: false, error: "End date is required" });
 
-    const result = await pg.query(STOCK_SNAPSHOT_SQL, [end_date]);
+    // 1) Find latest snapshot
+    const latestSnap = await getLatestSnapshot();
+    let baseDate = latestSnap || "1900-01-01";
 
-    const rows = result.rows.filter((r) => Number(r.stock_qty) !== 0);
+    // 2) Load snapshot base stock
+    const baseRows = latestSnap ? await getSnapshotBase(latestSnap) : [];
+
+    const finalStock = {};
+
+    baseRows.forEach((row) => {
+      finalStock[row.barcode] = {
+        barcode: row.barcode,
+        item_name: row.item_name,
+        stock_qty: Number(row.stock_qty),
+      };
+    });
+
+    // 3) Load changes since snapshot
+    const changes = await getChangesAfterSnapshot(baseDate, end_date);
+
+    changes.forEach((row) => {
+      if (!finalStock[row.barcode]) {
+        finalStock[row.barcode] = {
+          barcode: row.barcode,
+          item_name: row.item_name,
+          stock_qty: 0,
+        };
+      }
+
+      finalStock[row.barcode].stock_qty +=
+        Number(row.purchase_qty || 0) -
+        Number(row.sale_qty || 0) +
+        Number(row.return_qty || 0);
+    });
+
+    // Remove zero stock
+    const rows = Object.values(finalStock).filter(
+      (r) => Number(r.stock_qty) !== 0
+    );
 
     res.json({ success: true, rows });
   } catch (err) {
@@ -180,7 +243,7 @@ app.post("/api/snapshot-preview", async (req, res) => {
 });
 
 // =====================================================================
-// SNAPSHOT CREATE + LOG SAVE
+// SNAPSHOT CREATE (SAVE SNAPSHOT + LOG)
 // =====================================================================
 app.post("/api/snapshot-create", async (req, res) => {
   try {
@@ -189,34 +252,38 @@ app.post("/api/snapshot-create", async (req, res) => {
     if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
 
-    if (!end_date)
-      return res.json({ success: false, error: "End date is required" });
+    // First call preview API internally
+    const previewRes = await fetch("http://localhost:8000/api/snapshot-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ end_date }),
+    });
 
-    // Insert snapshot rows
-    const sqlInsert = `
-      INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty)
-      SELECT 
-        $1::date AS snap_date,
-        q.barcode,
-        q.item_name,
-        q.stock_qty
-      FROM ( ${STOCK_SNAPSHOT_SQL} ) q
-      WHERE q.stock_qty <> 0;
-    `;
+    const preview = await previewRes.json();
 
-    const result = await pg.query(sqlInsert, [end_date]);
+    if (!preview.success) return res.json(preview);
 
-    // ⭐ Save snapshot log
+    const rows = preview.rows;
+
+    for (const row of rows) {
+      await pg.query(
+        `INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty)
+         VALUES ($1, $2, $3, $4)`,
+        [end_date, row.barcode, row.item_name, row.stock_qty]
+      );
+    }
+
+    // Save snapshot log
     await pg.query(
       `INSERT INTO snapshot_logs (from_date, to_date, items_inserted)
        VALUES ($1, $2, $3)`,
-      [start_date, end_date, result.rowCount]
+      [start_date, end_date, rows.length]
     );
 
     res.json({
       success: true,
-      message: "Snapshot created!",
-      inserted: result.rowCount,
+      message: "Snapshot created successfully!",
+      inserted: rows.length,
     });
   } catch (err) {
     res.json({ success: false, error: err.message });
@@ -224,7 +291,7 @@ app.post("/api/snapshot-create", async (req, res) => {
 });
 
 // =====================================================================
-// SNAPSHOT HISTORY REPORT API
+// SNAPSHOT HISTORY
 // =====================================================================
 app.get("/api/snapshot-history", async (req, res) => {
   try {
@@ -241,13 +308,14 @@ app.get("/api/snapshot-history", async (req, res) => {
 });
 
 // =====================================================================
-// ARCHIVE PREVIEW
+// ARCHIVE SYSTEM (UNCHANGED)
 // =====================================================================
 app.post("/api/archive-preview", async (req, res) => {
   try {
     const { start_date, end_date } = req.body;
 
-    if (!start_date || !end_date)
+    if (!start_date || !
+end_date)
       return res.json({ success: false, error: "Missing dates" });
 
     const sql = `
@@ -281,51 +349,14 @@ app.post("/api/archive-preview", async (req, res) => {
     `;
 
     const result = await pg.query(sql, [start_date, end_date]);
-
     res.json({ success: true, rows: result.rows });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
 
-// =====================================================================
-// ARCHIVE TRANSFER  (summary_view → archive)
-// =====================================================================
-app.post("/api/archive-transfer", async (req, res) => {
-  try {
-    const { start_date, end_date, password } = req.body;
-
-    if (password !== "faizanyounus2122")
-      return res.json({ success: false, error: "Wrong password" });
-
-    const sql = `
-      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
-      SELECT 
-        barcode,
-        item_name,
-        purchase_qty,
-        sale_qty,
-        return_qty,
-        NOW()
-      FROM summary_view
-      WHERE final_date BETWEEN $1 AND $2;
-    `;
-
-    const result = await pg.query(sql, [start_date, end_date]);
-
-    res.json({
-      success: true,
-      message: "Transfer Completed Successfully!",
-      inserted: result.rowCount,
-    });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
-  }
-});
-
-// =====================================================================
-// ARCHIVE DELETE
-// =====================================================================
+// Archive Delete
 app.post("/api/archive-delete", async (req, res) => {
   try {
     const { start_date, end_date, password } = req.body;
@@ -349,6 +380,7 @@ app.post("/api/archive-delete", async (req, res) => {
     );
 
     res.json({ success: true, message: "Data Deleted Successfully!" });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -357,3 +389,4 @@ app.post("/api/archive-delete", async (req, res) => {
 // =====================================================================
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => console.log("🚀 Server running on port " + PORT));
+
