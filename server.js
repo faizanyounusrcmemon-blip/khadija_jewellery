@@ -113,11 +113,14 @@ app.post("/api/delete-backup", async (req, res) => {
 });
 
 // Auto backup daily at 2AM
-cron.schedule("0 2 * * *", () => {
-  console.log("⏰ Auto Backup Running...");
-  doBackup();
-}, { timezone: "Asia/Karachi" });
-
+cron.schedule(
+  "0 2 * * *",
+  () => {
+    console.log("⏰ Auto Backup Running...");
+    doBackup();
+  },
+  { timezone: "Asia/Karachi" }
+);
 
 // =====================================================================
 // STOCK SNAPSHOT SHARED QUERY
@@ -156,7 +159,6 @@ const STOCK_SNAPSHOT_SQL = `
   ) r ON r.barcode = i.barcode::text
 `;
 
-
 // =====================================================================
 // SNAPSHOT PREVIEW
 // =====================================================================
@@ -169,14 +171,13 @@ app.post("/api/snapshot-preview", async (req, res) => {
 
     const result = await pg.query(STOCK_SNAPSHOT_SQL, [end_date]);
 
-    const rows = result.rows.filter(r => Number(r.stock_qty) !== 0);
+    const rows = result.rows.filter((r) => Number(r.stock_qty) !== 0);
 
     res.json({ success: true, rows });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
-
 
 // =====================================================================
 // SNAPSHOT CREATE + LOG SAVE
@@ -215,14 +216,12 @@ app.post("/api/snapshot-create", async (req, res) => {
     res.json({
       success: true,
       message: "Snapshot created!",
-      inserted: result.rowCount
+      inserted: result.rowCount,
     });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
-
 
 // =====================================================================
 // SNAPSHOT HISTORY REPORT API
@@ -236,7 +235,6 @@ app.get("/api/snapshot-history", async (req, res) => {
     `);
 
     res.json({ success: true, rows: result.rows });
-
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -291,6 +289,41 @@ app.post("/api/archive-preview", async (req, res) => {
 });
 
 // =====================================================================
+// ARCHIVE TRANSFER  (summary_view → archive)
+// =====================================================================
+app.post("/api/archive-transfer", async (req, res) => {
+  try {
+    const { start_date, end_date, password } = req.body;
+
+    if (password !== "faizanyounus2122")
+      return res.json({ success: false, error: "Wrong password" });
+
+    const sql = `
+      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
+      SELECT 
+        barcode,
+        item_name,
+        purchase_qty,
+        sale_qty,
+        return_qty,
+        NOW()
+      FROM summary_view
+      WHERE final_date BETWEEN $1 AND $2;
+    `;
+
+    const result = await pg.query(sql, [start_date, end_date]);
+
+    res.json({
+      success: true,
+      message: "Transfer Completed Successfully!",
+      inserted: result.rowCount,
+    });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// =====================================================================
 // ARCHIVE DELETE
 // =====================================================================
 app.post("/api/archive-delete", async (req, res) => {
@@ -320,7 +353,6 @@ app.post("/api/archive-delete", async (req, res) => {
     res.json({ success: false, error: err.message });
   }
 });
-
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
