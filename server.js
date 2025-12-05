@@ -27,24 +27,20 @@ pg.connect()
 const app = express();
 
 // =====================================================
-// 🔥 SUPER CORS FIX (KOYEB + LOCALHOST دونوں کیلئے)
+// 🔥 SUPER CORS FIX (KOYEB + LOCALHOST)
 // =====================================================
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*"); // allow all origins
+  res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.header(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization, X-Requested-With"
   );
 
-  // Preflight کو یہیں ختم کر دو
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-// ساتھ میں normal CORS بھی رہنے دو
 app.use(cors());
 app.use(express.json());
 
@@ -55,7 +51,6 @@ app.get("/", (req, res) => res.json({ ok: true }));
 // =====================================================================
 // BACKUP SYSTEM
 // =====================================================================
-
 app.post("/api/backup", async (req, res) => {
   const result = await doBackup();
   res.json(result);
@@ -117,129 +112,12 @@ app.post("/api/delete-backup", async (req, res) => {
   }
 });
 
-// AUTO BACKUP (2 AM)
-cron.schedule(
-  "0 2 * * *",
-  () => {
-    console.log("⏰ Auto Backup Running...");
-    doBackup();
-  },
-  { timezone: "Asia/Karachi" }
-);
+// Auto backup daily at 2AM
+cron.schedule("0 2 * * *", () => {
+  console.log("⏰ Auto Backup Running...");
+  doBackup();
+}, { timezone: "Asia/Karachi" });
 
-// =====================================================================
-// ARCHIVE PREVIEW
-// =====================================================================
-app.post("/api/archive-preview", async (req, res) => {
-  try {
-    const { start_date, end_date } = req.body;
-
-    if (!start_date || !end_date)
-      return res.json({ success: false, error: "Missing dates" });
-
-    const sql = `
-      SELECT 
-        barcode::text AS barcode,
-        item_name,
-        SUM(purchase_qty) AS purchase_qty,
-        SUM(sale_qty) AS sale_qty,
-        SUM(return_qty) AS return_qty
-      FROM (
-        SELECT barcode::text, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
-        FROM purchases
-        WHERE is_deleted = FALSE 
-          AND purchase_date BETWEEN $1 AND $2
-
-        UNION ALL
-
-        SELECT barcode::text, item_name, 0, qty, 0
-        FROM sales
-        WHERE is_deleted = FALSE 
-          AND sale_date BETWEEN $1 AND $2
-
-        UNION ALL
-
-        SELECT barcode::text, item_name, 0, 0, return_qty
-        FROM sale_returns
-        WHERE created_at::date BETWEEN $1 AND $2
-      ) t
-      GROUP BY barcode, item_name
-      ORDER BY barcode;
-    `;
-
-    const result = await pg.query(sql, [start_date, end_date]);
-
-    res.json({ success: true, rows: result.rows });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
-  }
-});
-
-// =====================================================================
-// ARCHIVE TRANSFER
-// =====================================================================
-app.post("/api/archive-transfer", async (req, res) => {
-  try {
-    const { start_date, end_date, password } = req.body;
-
-    if (password !== "faizanyounus2122")
-      return res.json({ success: false, error: "Wrong password" });
-
-    const sql = `
-      INSERT INTO archive (barcode, item_name, purchase_qty, sale_qty, return_qty, created_at)
-      SELECT 
-        barcode,
-        item_name,
-        purchase_qty,
-        sale_qty,
-        return_qty,
-        NOW()
-      FROM summary_view
-      WHERE final_date BETWEEN $1 AND $2;
-    `;
-
-    const result = await pg.query(sql, [start_date, end_date]);
-
-    res.json({
-      success: true,
-      message: "Transfer Completed Successfully!",
-      inserted: result.rowCount,
-    });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
-  }
-});
-
-// =====================================================================
-// ARCHIVE DELETE
-// =====================================================================
-app.post("/api/archive-delete", async (req, res) => {
-  try {
-    const { start_date, end_date, password } = req.body;
-
-    if (password !== "faizanyounus2122")
-      return res.json({ success: false, error: "Wrong password" });
-
-    await pg.query(
-      `DELETE FROM purchases WHERE purchase_date BETWEEN $1 AND $2`,
-      [start_date, end_date]
-    );
-
-    await pg.query(
-      `DELETE FROM sales WHERE sale_date BETWEEN $1 AND $2`,
-      [start_date, end_date]
-    );
-
-    await pg.query(
-      `DELETE FROM sale_returns WHERE created_at::date BETWEEN $1 AND $2`,
-      [start_date, end_date]
-    );
-
-    res.json({ success: true, message: "Data Deleted Successfully!" });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
-  }
-});
 
 // =====================================================================
 // STOCK SNAPSHOT SHARED QUERY
@@ -278,8 +156,9 @@ const STOCK_SNAPSHOT_SQL = `
   ) r ON r.barcode = i.barcode::text
 `;
 
+
 // =====================================================================
-// SNAPSHOT PREVIEW — No Save
+// SNAPSHOT PREVIEW
 // =====================================================================
 app.post("/api/snapshot-preview", async (req, res) => {
   try {
@@ -290,7 +169,7 @@ app.post("/api/snapshot-preview", async (req, res) => {
 
     const result = await pg.query(STOCK_SNAPSHOT_SQL, [end_date]);
 
-    const rows = result.rows.filter((r) => Number(r.stock_qty) !== 0);
+    const rows = result.rows.filter(r => Number(r.stock_qty) !== 0);
 
     res.json({ success: true, rows });
   } catch (err) {
@@ -298,12 +177,13 @@ app.post("/api/snapshot-preview", async (req, res) => {
   }
 });
 
+
 // =====================================================================
-// SNAPSHOT CREATE — Save to DB
+// SNAPSHOT CREATE + LOG SAVE
 // =====================================================================
 app.post("/api/snapshot-create", async (req, res) => {
   try {
-    const { end_date, password } = req.body;
+    const { start_date, end_date, password } = req.body;
 
     if (password !== "faizanyounus2122")
       return res.json({ success: false, error: "Wrong password" });
@@ -311,6 +191,7 @@ app.post("/api/snapshot-create", async (req, res) => {
     if (!end_date)
       return res.json({ success: false, error: "End date is required" });
 
+    // Insert snapshot rows
     const sqlInsert = `
       INSERT INTO stock_snapshots (snap_date, barcode, item_name, stock_qty)
       SELECT 
@@ -318,23 +199,49 @@ app.post("/api/snapshot-create", async (req, res) => {
         q.barcode,
         q.item_name,
         q.stock_qty
-      FROM (
-        ${STOCK_SNAPSHOT_SQL}
-      ) AS q
+      FROM ( ${STOCK_SNAPSHOT_SQL} ) q
       WHERE q.stock_qty <> 0;
     `;
 
     const result = await pg.query(sqlInsert, [end_date]);
 
+    // ⭐ Save snapshot log
+    await pg.query(
+      `INSERT INTO snapshot_logs (from_date, to_date, items_inserted)
+       VALUES ($1, $2, $3)`,
+      [start_date, end_date, result.rowCount]
+    );
+
     res.json({
       success: true,
       message: "Snapshot created!",
-      inserted: result.rowCount,
+      inserted: result.rowCount
     });
+
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
+
+
+// =====================================================================
+// SNAPSHOT HISTORY REPORT API
+// =====================================================================
+app.get("/api/snapshot-history", async (req, res) => {
+  try {
+    const result = await pg.query(`
+      SELECT id, from_date, to_date, items_inserted, created_at
+      FROM snapshot_logs
+      ORDER BY id DESC
+    `);
+
+    res.json({ success: true, rows: result.rows });
+
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
