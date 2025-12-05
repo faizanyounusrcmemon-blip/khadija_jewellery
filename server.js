@@ -242,6 +242,85 @@ app.get("/api/snapshot-history", async (req, res) => {
   }
 });
 
+// =====================================================================
+// ARCHIVE PREVIEW
+// =====================================================================
+app.post("/api/archive-preview", async (req, res) => {
+  try {
+    const { start_date, end_date } = req.body;
+
+    if (!start_date || !end_date)
+      return res.json({ success: false, error: "Missing dates" });
+
+    const sql = `
+      SELECT 
+        barcode::text AS barcode,
+        item_name,
+        SUM(purchase_qty) AS purchase_qty,
+        SUM(sale_qty) AS sale_qty,
+        SUM(return_qty) AS return_qty
+      FROM (
+        SELECT barcode::text, item_name, qty AS purchase_qty, 0 AS sale_qty, 0 AS return_qty
+        FROM purchases
+        WHERE is_deleted = FALSE 
+          AND purchase_date BETWEEN $1 AND $2
+
+        UNION ALL
+
+        SELECT barcode::text, item_name, 0, qty, 0
+        FROM sales
+        WHERE is_deleted = FALSE 
+          AND sale_date BETWEEN $1 AND $2
+
+        UNION ALL
+
+        SELECT barcode::text, item_name, 0, 0, return_qty
+        FROM sale_returns
+        WHERE created_at::date BETWEEN $1 AND $2
+      ) t
+      GROUP BY barcode, item_name
+      ORDER BY barcode;
+    `;
+
+    const result = await pg.query(sql, [start_date, end_date]);
+
+    res.json({ success: true, rows: result.rows });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// =====================================================================
+// ARCHIVE DELETE
+// =====================================================================
+app.post("/api/archive-delete", async (req, res) => {
+  try {
+    const { start_date, end_date, password } = req.body;
+
+    if (password !== "faizanyounus2122")
+      return res.json({ success: false, error: "Wrong password" });
+
+    await pg.query(
+      `DELETE FROM purchases WHERE purchase_date BETWEEN $1 AND $2`,
+      [start_date, end_date]
+    );
+
+    await pg.query(
+      `DELETE FROM sales WHERE sale_date BETWEEN $1 AND $2`,
+      [start_date, end_date]
+    );
+
+    await pg.query(
+      `DELETE FROM sale_returns WHERE created_at::date BETWEEN $1 AND $2`,
+      [start_date, end_date]
+    );
+
+    res.json({ success: true, message: "Data Deleted Successfully!" });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
 
 // =====================================================================
 const PORT = process.env.PORT || 8000;
