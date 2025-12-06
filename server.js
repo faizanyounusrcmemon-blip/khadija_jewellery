@@ -184,6 +184,9 @@ LEFT JOIN ret ON ret.barcode = b.barcode
 // =====================================================================
 // SNAPSHOT PREVIEW
 // =====================================================================
+// =====================================================================
+// ⭐ FINAL SNAPSHOT PREVIEW (uses full base snapshot SQL)
+// =====================================================================
 app.post("/api/snapshot-preview", async (req, res) => {
   try {
     const { end_date } = req.body;
@@ -191,90 +194,25 @@ app.post("/api/snapshot-preview", async (req, res) => {
     if (!end_date)
       return res.json({ success: false, error: "End date is required" });
 
-    // 1) Find last snapshot
-    const lastSnap = await pg.query(`
-      SELECT snap_date 
-      FROM stock_snapshots 
-      ORDER BY snap_date DESC 
-      LIMIT 1
-    `);
+    // run STOCK_SNAPSHOT_SQL (but do NOT insert into table)
+    const sql = `
+      SELECT 
+        q.barcode,
+        q.item_name,
+        q.stock_qty
+      FROM (${STOCK_SNAPSHOT_SQL}) q
+      WHERE q.stock_qty <> 0
+    `;
 
-    let baseDate = "1900-01-01"; // if no snapshot
-    if (lastSnap.rows.length > 0) {
-      baseDate = lastSnap.rows[0].snap_date;
-    }
+    const result = await pg.query(sql, [end_date]);
 
-    // 2) Base stock from snapshot table
-    const baseStock = await pg.query(`
-      SELECT barcode::text, item_name, SUM(stock_qty) AS stock_qty
-      FROM stock_snapshots
-      WHERE snap_date = $1
-      GROUP BY barcode::text, item_name
-    `, [baseDate]);
-
-    // convert base snapshot rows into map
-    const stockMap = {};
-    baseStock.rows.forEach(r => {
-      stockMap[r.barcode] = {
-        barcode: r.barcode,
-        item_name: r.item_name,
-        stock_qty: Number(r.stock_qty)
-      };
-    });
-
-    // 3) Purchases after snapshot
-    const purchases = await pg.query(`
-      SELECT barcode::text, SUM(qty) AS qty
-      FROM purchases
-      WHERE is_deleted = false 
-        AND purchase_date > $1
-        AND purchase_date <= $2
-      GROUP BY barcode::text
-    `, [baseDate, end_date]);
-
-    purchases.rows.forEach(r => {
-      if (!stockMap[r.barcode]) stockMap[r.barcode] = { barcode: r.barcode, stock_qty: 0, item_name: "" };
-      stockMap[r.barcode].stock_qty += Number(r.qty);
-    });
-
-    // 4) Sales after snapshot
-    const sales = await pg.query(`
-      SELECT barcode::text, SUM(qty) AS qty
-      FROM sales
-      WHERE is_deleted = false
-        AND sale_date > $1
-        AND sale_date <= $2
-      GROUP BY barcode::text
-    `, [baseDate, end_date]);
-
-    sales.rows.forEach(r => {
-      if (!stockMap[r.barcode]) stockMap[r.barcode] = { barcode: r.barcode, stock_qty: 0, item_name: "" };
-      stockMap[r.barcode].stock_qty -= Number(r.qty);
-    });
-
-    // 5) Returns after snapshot
-    const returns = await pg.query(`
-      SELECT barcode::text, SUM(return_qty) AS qty
-      FROM sale_returns
-      WHERE created_at::date > $1
-        AND created_at::date <= $2
-      GROUP BY barcode::text
-    `, [baseDate, end_date]);
-
-    returns.rows.forEach(r => {
-      if (!stockMap[r.barcode]) stockMap[r.barcode] = { barcode: r.barcode, stock_qty: 0, item_name: "" };
-      stockMap[r.barcode].stock_qty += Number(r.qty);
-    });
-
-    // Final output array
-    const finalRows = Object.values(stockMap).filter(r => r.stock_qty !== 0);
-
-    res.json({ success: true, rows: finalRows });
+    res.json({ success: true, rows: result.rows });
 
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
+
 
 // =====================================================================
 // SNAPSHOT CREATE + LOG
