@@ -4,7 +4,7 @@ const path = require("path");
 const os = require("os");
 const unzipper = require("unzipper");
 
-const TABLES = ["sales", "purchases", "items", "customers", "app_users", "sale_returns"];
+const TABLES = ["sales", "purchases", "items", "customers", "app_users", "sale_returns", "stock_snapshots", "snapshot_logs"];
 
 // ============================================
 // MAIN FUNCTION
@@ -141,4 +141,5 @@ function splitCSV(str) {
 
   out.push(current);
   return out;
+
 }
