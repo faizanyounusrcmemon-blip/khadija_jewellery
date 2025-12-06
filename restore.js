@@ -27,7 +27,7 @@ module.exports = async function restoreBackup(req, res) {
       .pipe(unzipper.Extract({ path: outDir }))
       .promise();
 
-    const TABLES = ["sales", "purchases", "items", "customers", "app_users", "sale_returns"];
+    const TABLES = ["sales", "purchases", "items", "customers", "app_users", "sale_returns", "stock_snapshots", "snapshot_logs"];
 
     for (const table of TABLES) {
       const csvPath = path.join(outDir, `${table}.csv`);
@@ -52,4 +52,5 @@ module.exports = async function restoreBackup(req, res) {
   } catch (e) {
     return res.status(500).json({ ok: false, message: e.message });
   }
+
 };
