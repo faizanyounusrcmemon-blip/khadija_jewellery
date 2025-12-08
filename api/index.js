@@ -1,6 +1,9 @@
-
-import app from "../None";
-
-export default function handler(req, res) {
-  return app(req, res);
+{
+  "version": 2,
+  "builds": [
+    { "src": "server.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "/server.js" }
+  ]
 }
