@@ -435,6 +435,3 @@ app.post("/api/archive-delete", async (req, res) => {
 });
 
 
-// =====================================================================
-const PORT = process.env.PORT || 5000;
-
