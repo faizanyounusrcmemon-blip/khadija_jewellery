@@ -118,6 +118,18 @@ cron.schedule("0 2 * * *", () => {
   doBackup();
 }, { timezone: "Asia/Karachi" });
 
+// =====================================
+// KEEP ALIVE PING (FREE PLAN FIX)
+// =====================================
+app.get("/api/ping", async (req, res) => {
+  try {
+    const result = await pingDatabase();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 // =====================================================================
 // ⭐ NEW — SNAPSHOT SYSTEM WITH BASE SNAPSHOT
