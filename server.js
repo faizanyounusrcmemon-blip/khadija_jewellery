@@ -8,6 +8,7 @@ const cron = require("node-cron");
 const doBackup = require("./backup");
 const listBackups = require("./listBackups");
 const restoreFromBucket = require("./restoreFromBucket");
+const pingDatabase = require("./ping");
 const supabase = require("./db");
 
 const { Client } = require("pg");
